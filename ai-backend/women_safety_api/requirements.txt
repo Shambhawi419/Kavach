@@ -8,5 +8,4 @@ scikit-learn
 feedparser
 apscheduler
 python-dotenv
-kagglehub
 openai

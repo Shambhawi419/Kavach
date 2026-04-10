@@ -3,7 +3,6 @@ import re
 import math
 import sqlite3
 import joblib
-import shutil
 import requests
 import feedparser
 import pandas as pd
@@ -13,9 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 from openai import OpenAI
-from xgboost import XGBRegressor
-from sklearn.model_selection import train_test_split
-import kagglehub
 
 load_dotenv()
 
@@ -40,50 +36,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------- AUTO SETUP ----------------
-def setup_model_and_data():
-    """Download dataset and train model if not present. Runs on startup."""
-    os.makedirs("model_files", exist_ok=True)
-
-    # Download CSV if missing
-    if not os.path.exists(CSV_PATH):
-        print("[SETUP] Downloading dataset from Kaggle...")
-        try:
-            path = kagglehub.dataset_download(
-                "harigoshika/crimes-against-women-in-india-a-20-year-analysis"
-            )
-            for file in os.listdir(path):
-                if file.endswith(".csv"):
-                    shutil.copy(os.path.join(path, file), CSV_PATH)
-                    print(f"[SETUP] CSV saved to {CSV_PATH}")
-                    break
-        except Exception as e:
-            print(f"[SETUP ERROR] Could not download dataset: {e}")
-
-    # Train and save model if missing
-    if not os.path.exists(MODEL_PATH) and os.path.exists(CSV_PATH):
-        print("[SETUP] Training model...")
-        try:
-            df = pd.read_csv(CSV_PATH).fillna(0)
-            crime_cols = df.columns[2:]
-            df["total_crime"] = df[crime_cols].sum(axis=1)
-            df["risk_score"]  = df["total_crime"] / df["total_crime"].max()
-            df["State_enc"]   = df.iloc[:, 0].astype("category").cat.codes
-
-            X = df[["State_enc", df.columns[1], "total_crime"]].values
-            y = df["risk_score"].values
-            X_train, X_test, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42)
-
-            mdl = XGBRegressor(n_estimators=200, learning_rate=0.1, max_depth=5, random_state=42)
-            mdl.fit(X_train, y_train)
-            import joblib as jl
-            jl.dump(mdl, MODEL_PATH)
-            print(f"[SETUP] Model saved to {MODEL_PATH}")
-        except Exception as e:
-            print(f"[SETUP ERROR] Could not train model: {e}")
-
-setup_model_and_data()
-model = joblib.load(MODEL_PATH)
+# model is optional — NCRB data is the primary baseline
+model = None
+if os.path.exists(MODEL_PATH):
+    try:
+        model = joblib.load(MODEL_PATH)
+        print(f"[SETUP] Model loaded from {MODEL_PATH}")
+    except Exception as e:
+        print(f"[SETUP] Model load failed: {e}, using NCRB baseline only")
+else:
+    print("[SETUP] No model file found — using NCRB baseline only")
 
 CATEGORY_WEIGHTS = {
     "harassment": 3,
@@ -450,13 +412,16 @@ NCRB_STATE_RISK = {
 def get_baseline(state):
     if state == "Unknown":
         return 0.4
-    # Use NCRB lookup first (reliable), fall back to model
+    # Use NCRB lookup first (reliable)
     if state in NCRB_STATE_RISK:
         return NCRB_STATE_RISK[state]
-    enc  = encode_state(state)
-    pend = pendency_map.get(state, 1000)
-    raw  = float(model.predict([[enc, 2024, pend]])[0])
-    return min(max(raw, 0.1), 1.0)
+    # Fall back to model only if loaded
+    if model is not None:
+        enc  = encode_state(state)
+        pend = pendency_map.get(state, 1000)
+        raw  = float(model.predict([[enc, 2024, pend]])[0])
+        return min(max(raw, 0.1), 1.0)
+    return 0.4  # default if no model and state not in NCRB
 
 # ---------------- COMPUTE ----------------
 def compute(lat, lon):
