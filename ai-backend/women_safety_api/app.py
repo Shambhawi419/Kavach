@@ -87,15 +87,22 @@ INDIAN_LOCATIONS = {
 }
 
 # ---------------- LOAD CSV DATA ----------------
-df = pd.read_csv(CSV_PATH).fillna(0)
-
 pendency_map = {}
-for _, row in df.iterrows():
-    state = str(row.iloc[0]).strip()
-    values = pd.to_numeric(row.iloc[1:], errors="coerce")
-    pendency_map[state] = values.sum()
+STATE_MAPPING = {}
 
-STATE_MAPPING = {state: i for i, state in enumerate(pendency_map.keys())}
+if os.path.exists(CSV_PATH):
+    try:
+        df = pd.read_csv(CSV_PATH).fillna(0)
+        for _, row in df.iterrows():
+            state = str(row.iloc[0]).strip()
+            values = pd.to_numeric(row.iloc[1:], errors="coerce")
+            pendency_map[state] = values.sum()
+        STATE_MAPPING = {state: i for i, state in enumerate(pendency_map.keys())}
+        print(f"[SETUP] CSV loaded from {CSV_PATH}")
+    except Exception as e:
+        print(f"[SETUP] CSV load failed: {e}, using NCRB baseline only")
+else:
+    print("[SETUP] No CSV found — using NCRB baseline only")
 
 # ---------------- DB ----------------
 conn   = sqlite3.connect("events.db", check_same_thread=False)
